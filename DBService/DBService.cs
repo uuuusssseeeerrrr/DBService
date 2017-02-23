@@ -12,51 +12,89 @@ namespace DBService
     {
         public const string SQLServer = "SQLServer";
         public const string MySQL = "MySQL";
-        private readonly string ConnectionType = "";
-        private string connectionString = "";
+        private static string connectionType = "";
+        private static string connectionString = "";
         string ConnectionString { get { return connectionString; } set { connectionString = value; } }
         private volatile static DBService _service;
         private MySqlConnection mysqlConn = null;
         private SqlConnection sqlConn = null;
 
-        private DBService(string TypeStr)
-        {
-            switch (TypeStr)
-            {
-                case DBService.SQLServer:
-                    ConnectionType = DBService.SQLServer;
-                    break;
-                case DBService.MySQL:
-                    ConnectionType = DBService.MySQL;
-                    break;
-                default:
-                    throw new Exception("I don't know DBType");
-            }
-        }
-
         /// <summary>
-        /// DBService 초기설정
+        /// DBService init(custom Concection)
         /// </summary>
-        /// <param name="TypeStr">DBMS 종류(SQLServer, MySQL)</param>
-        /// <param name="ConnStr">DB연결 문자열</param>
-        public static DBService GetInstatce(string TypeStr, string ConnStr)
+        /// <param name="TypeStr">DBMS(SQLServer, MySQL)</param>
+        /// <param name="ConnStr">Connection String</param>
+        public static void init(string TypeStr, string ConnStr)
         {
             if (string.IsNullOrWhiteSpace(TypeStr) == false && string.IsNullOrWhiteSpace(ConnStr) == false)
             {
-                lock (typeof(DBService))
-                {
-                    if (_service == null)
-                    {
-                        _service = new DBService(TypeStr);
-                    }
-                }
+                connectionType = TypeStr;
                 _service.ConnectionString = ConnStr;
-                return _service;
             }
             else
             {
                 throw new Exception("TypeStr & ConnStr Is Null");
             }
+        }
+
+        /// <summary>
+        /// DBService init(default Concection)
+        /// </summary>
+        /// <param name="TypeStr">DBMS(SQLServer, MySQL)</param>
+        /// <param name="hostIP">Connection IP</param>
+        /// <param name="port">Connection Port(Nullable)</param>
+        /// <param name="id">Connection ID</param>
+        /// <param name="password">Connection Password</param>
+        public static void init(string TypeStr, string hostIP, string port, string id, string password, string DBName)
+        {
+            if (string.IsNullOrWhiteSpace(TypeStr) == false
+                && string.IsNullOrWhiteSpace(hostIP) == false
+                && string.IsNullOrWhiteSpace(id) == false
+                && string.IsNullOrWhiteSpace(password) == false
+                && string.IsNullOrWhiteSpace(DBName) == false)
+            {
+                connectionType = TypeStr;
+                switch (TypeStr)
+                {
+                    case DBService.SQLServer:
+                        if (string.IsNullOrWhiteSpace(port) == false)
+                            _service.ConnectionString = string.Format("Data Source={0},{1};Initial Catalog={4};Persist Security Info=True;User ID={2};Password={3}", hostIP, port, id, password, DBName);
+                        else
+                            _service.ConnectionString = string.Format("Data Source={0};Initial Catalog={3};Persist Security Info=True;User ID={1};Password={2}", hostIP, id, password, DBName);
+                        break;
+                    case DBService.MySQL:
+                        if (string.IsNullOrWhiteSpace(port) == false)
+                        {
+                            _service.ConnectionString = string.Format("Server={0};Port={1};Database={2};Uid={3};Pwd={4}", hostIP, port, DBName, id, password);
+                        }
+                        else
+                        {
+                            _service.ConnectionString = string.Format("Server={0};Database={1};Uid={2};Pwd={3}", hostIP, DBName, id, password);
+                        }
+                        break;
+                }
+            }
+            else
+            {
+                throw new Exception("Parameter Is Null");
+            }
+        }
+
+        public static void GetInstance()
+        {
+            try 
+            { 
+                 lock (typeof(DBService))
+                {
+                    if (_service == null)
+                    {
+                        _service = new DBService();
+                    }
+                }
+            } catch(Exception){
+                throw new Exception("init Plz");
+            }
+               
         }
 
         /// <summary>
@@ -68,7 +106,7 @@ namespace DBService
         {
             DataTable table = new DataTable();
 
-            switch (ConnectionType)
+            switch (connectionType)
             {
                 case DBService.MySQL:
                     try
@@ -126,7 +164,7 @@ namespace DBService
         public DataTable Select(string sql, string[] parameters, object[] values)
         {
             DataTable table = new DataTable();
-            switch (ConnectionType)
+            switch (connectionType)
             {
                 case DBService.MySQL:
                     try
@@ -203,7 +241,7 @@ namespace DBService
         {
             DataTable table = new DataTable();
             string[] resArray;
-            switch (ConnectionType)
+            switch (connectionType)
             {
                 case DBService.MySQL:
                     try
@@ -265,9 +303,9 @@ namespace DBService
                     }
                     break;
             }
-            resArray = new string[table.Rows.Count-1];
+            resArray = new string[table.Rows.Count - 1];
 
-            for (int i=0;i<table.Rows.Count;i++)
+            for (int i = 0; i < table.Rows.Count; i++)
             {
                 resArray[i] = table.Rows[i][0].ToString();
             }
@@ -312,7 +350,7 @@ namespace DBService
         }
 
         /// <summary>
-        /// Insert, Update, Delete
+        /// Insert, Update, Delete (Inner Method)
         /// </summary>
         /// <param name="sql">SQL</param>
         /// <param name="parameters">parameter(string array)</param>
@@ -321,7 +359,7 @@ namespace DBService
         private int IUD(string sql, string[] parameters, object[] values)
         {
             int msg = 0;
-            switch (ConnectionType)
+            switch (connectionType)
             {
                 case DBService.MySQL:
                     try
