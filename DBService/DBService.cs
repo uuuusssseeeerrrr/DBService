@@ -1,424 +1,350 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-using System.IO;
+using System;
 using System.Data;
+using System.Text.RegularExpressions;
 using MySql.Data.MySqlClient;
-using System.Data.SqlClient;
 
-namespace DBService
+class DBService
 {
-    class DBService
+    private volatile static DBService _service;
+    private MySqlConnection conn = null;
+
+    public static DBService GetInstatce()
     {
-        public const string SQLServer = "SQLServer";
-        public const string MySQL = "MySQL";
-        private static string connectionType = "";
-        private static string connectionString = "";
-        string ConnectionString { get { return connectionString; } set { connectionString = value; } }
-        private volatile static DBService _service;
-        private MySqlConnection mysqlConn = null;
-        private SqlConnection sqlConn = null;
-
-        /// <summary>
-        /// DBService init(custom Concection)
-        /// </summary>
-        /// <param name="TypeStr">DBMS(SQLServer, MySQL)</param>
-        /// <param name="ConnStr">Connection String</param>
-        public static void init(string TypeStr, string ConnStr)
+        lock (typeof(DBService))
         {
-            if (string.IsNullOrWhiteSpace(TypeStr) == false && string.IsNullOrWhiteSpace(ConnStr) == false)
+            if (_service == null)
             {
-                connectionType = TypeStr;
-                _service.ConnectionString = ConnStr;
-            }
-            else
-            {
-                throw new Exception("TypeStr & ConnStr Is Null");
+                _service = new DBService();
             }
         }
+        return _service;
+    }
 
-        /// <summary>
-        /// DBService init(default Concection)
-        /// </summary>
-        /// <param name="TypeStr">DBMS(SQLServer, MySQL)</param>
-        /// <param name="hostIP">Connection IP</param>
-        /// <param name="port">Connection Port(Nullable)</param>
-        /// <param name="id">Connection ID</param>
-        /// <param name="password">Connection Password</param>
-        public static void init(string TypeStr, string hostIP, string port, string id, string password, string DBName)
+    /// <summary>
+    /// select(파라미터가 없으면 values에 null입력)
+    /// </summary>
+    public DataTable Select(string sql, object[] values)
+    {
+        DataTable table = new DataTable();
+
+        if (values == null || arraylength(values) == 0)
         {
-            if (string.IsNullOrWhiteSpace(TypeStr) == false
-                && string.IsNullOrWhiteSpace(hostIP) == false
-                && string.IsNullOrWhiteSpace(id) == false
-                && string.IsNullOrWhiteSpace(password) == false
-                && string.IsNullOrWhiteSpace(DBName) == false)
+            table = SelectAll(sql);
+        }
+        else
+        {
+            resizeArray(ref values);
+            string[] ParamArray = extractParameters(sql);
+            table = SelectWtihParameters(sql, ParamArray, values);
+        }
+        return table;
+    }
+
+    /// <summary>
+    /// 파라미터가 존재하는 자료를 SELECT한다
+    /// </summary>
+    private DataTable SelectWtihParameters(string sql, string[] parameters, object[] values)
+    {
+        DataTable table = new DataTable();
+        DataSet set = new DataSet();
+        MySqlDataAdapter adapter = new MySqlDataAdapter();
+        try
+        {
+            using (conn = new MySqlConnection(bleumembership.Properties.Resources.ConnectionString))
             {
-                connectionType = TypeStr;
-                switch (TypeStr)
+                conn.Open();
+                MySqlCommand command = new MySqlCommand(sql, conn);
+                if (parameters.Length > 0)
                 {
-                    case DBService.SQLServer:
-                        if (string.IsNullOrWhiteSpace(port) == false)
-                            _service.ConnectionString = string.Format("Data Source={0},{1};Initial Catalog={4};Persist Security Info=True;User ID={2};Password={3}", hostIP, port, id, password, DBName);
-                        else
-                            _service.ConnectionString = string.Format("Data Source={0};Initial Catalog={3};Persist Security Info=True;User ID={1};Password={2}", hostIP, id, password, DBName);
-                        break;
-                    case DBService.MySQL:
-                        if (string.IsNullOrWhiteSpace(port) == false)
+                    for (int i = 0; i < parameters.Length; i++)
+                    {
+                        if (string.IsNullOrEmpty(parameters[i]) == false)
                         {
-                            _service.ConnectionString = string.Format("Server={0};Port={1};Database={2};Uid={3};Pwd={4}", hostIP, port, DBName, id, password);
+                            command.Parameters.AddWithValue(parameters[i], values[i].ToString());
+                            adapter.SelectCommand = command;
                         }
-                        else
+                    }
+                }
+                //MySqlDataReader reader = command.ExecuteReader();
+                //table.Load(reader);
+                adapter.Fill(set);
+            }
+        }
+        catch (Exception ex)
+        {
+#if DEBUG
+            Console.WriteLine(ex.Message);
+            Console.WriteLine(ex.StackTrace);
+            Console.WriteLine(ex.InnerException);
+#else
+            //write yout logs
+#endif
+        }
+        return set.Tables[0];
+    }
+
+    /// <summary>
+    /// 파라미터가 없는 자료를 SELECT 한다
+    /// </summary>
+    private DataTable SelectAll(string sql)
+    {
+        DataSet set = new DataSet();
+        try
+        {
+            using (MySqlDataAdapter adapter = new MySqlDataAdapter(sql, bleumembership.Properties.Resources.ConnectionString))
+            {
+                adapter.Fill(set);
+            }
+        }
+        catch (Exception ex)
+        {
+#if DEBUG
+            Console.WriteLine(ex.Message);
+            Console.WriteLine(ex.StackTrace);
+#else
+            //write yout logs
+#endif
+        }
+        return set.Tables[0];
+    }
+
+
+    /// <summary>
+    /// 입력한 자료를 저장한다
+    /// </summary>
+    public string Save(string sql, DataTable table)
+    {
+        string msg = "";
+        try
+        {
+            using (conn = new MySqlConnection(bleumembership.Properties.Resources.ConnectionString))
+            {
+                MySqlDataAdapter dataAdapter = new MySqlDataAdapter(sql, conn);
+                using (MySqlCommandBuilder builder = new MySqlCommandBuilder(dataAdapter))
+                {
+                    dataAdapter.Update(table);
+                    msg = "저장 되었습니다.";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            msg = "저장하지 못했습니다";
+#if DEBUG
+            Console.WriteLine(ex.Message);
+            Console.WriteLine(ex.StackTrace);
+#else
+            //write yout logs
+#endif
+        }
+        return msg;
+    }
+
+    /// <summary>
+    /// sql문을 이용한 삭제
+    /// </summary>
+    public int Delete(string sql, object[] values)
+    {
+        int msg = 0;
+        string[] parameters = extractParameters(sql);
+        try
+        {
+            using (conn = new MySqlConnection(bleumembership.Properties.Resources.ConnectionString))
+            {
+                MySqlCommand command = new MySqlCommand(sql, conn);
+                conn.Open();
+                if (parameters != null && values != null)
+                {
+                    for (int i = 0; i < parameters.Length; i++)
+                    {
+                        if (string.IsNullOrEmpty(parameters[i]) == false)
                         {
-                            _service.ConnectionString = string.Format("Server={0};Database={1};Uid={2};Pwd={3}", hostIP, DBName, id, password);
+                            command.Parameters.AddWithValue(parameters[i], values[i]);
                         }
-                        break;
+                    }
+                }
+                msg = command.ExecuteNonQuery();
+            }
+        }
+        catch (Exception ex)
+        {
+#if DEBUG
+            Console.WriteLine(ex.Message);
+            Console.WriteLine(ex.StackTrace);
+#else
+            //write yout logs
+#endif
+        }
+        return msg;
+    }
+
+    /// <summary>
+    /// sql문을 이용한 삽입
+    /// </summary>
+    public int Insert(string sql, object[] values)
+    {
+        int msg = 0;
+        string[] parameters = extractParameters(sql);
+        try
+        {
+            using (conn = new MySqlConnection(bleumembership.Properties.Resources.ConnectionString))
+            {
+                MySqlCommand command = new MySqlCommand(sql, conn);
+                conn.Open();
+                if (parameters != null && values != null)
+                {
+                    for (int i = 0; i < parameters.Length; i++)
+                    {
+                        if (string.IsNullOrEmpty(parameters[i]) == false)
+                        {
+                            command.Parameters.AddWithValue(parameters[i], values[i]);
+                        }
+                    }
+                }
+                msg = command.ExecuteNonQuery();
+            }
+        }
+        catch (Exception ex)
+        {
+#if DEBUG
+            Console.WriteLine("Insert");
+            Console.WriteLine(ex.Message);
+            Console.WriteLine(ex.StackTrace);
+            Console.WriteLine(ex.InnerException);
+            Console.WriteLine(ex.Source);
+#else
+            //write yout logs
+#endif
+        }
+        return msg;
+    }
+
+    /// <summary>
+    /// sql문을 이용한 수정
+    /// </summary>
+    public int Update(string sql, object[] values)
+    {
+        int msg = 0;
+        string[] parameters = extractParameters(sql);
+        try
+        {
+            using (conn = new MySqlConnection(bleumembership.Properties.Resources.ConnectionString))
+            {
+                MySqlCommand command = new MySqlCommand(sql, conn);
+                conn.Open();
+                if (parameters != null && values != null)
+                {
+                    for (int i = 0; i < parameters.Length; i++)
+                    {
+                        if (string.IsNullOrEmpty(parameters[i]) == false)
+                        {
+                            command.Parameters.AddWithValue(parameters[i], values[i]);
+                        }
+                    }
+                }
+                msg = command.ExecuteNonQuery();
+            }
+        }
+        catch (Exception ex)
+        {
+#if DEBUG
+            Console.WriteLine("Update");
+            Console.WriteLine(ex.Message);
+            Console.WriteLine(ex.StackTrace);
+            Console.WriteLine(ex.InnerException);
+            Console.WriteLine(ex.Source);
+#else
+            //write yout logs
+#endif
+        }
+        return msg;
+    }
+
+    /// <summary>
+    /// 쿼리의 결과를 2차 배열로 리턴
+    /// </summary>
+    public string[][] GetDataArray(DataTable dt)
+    {
+        string[][] datas = null;
+        try
+        {
+            int dt_rows_count = dt.Rows.Count;//데이터 테이블의 행 수 얻기
+            int dt_cols_count = dt.Columns.Count;//데이터 테이블의 칼럼 수 얻기얻기 
+
+            if (dt_rows_count > 0)//데이터 테이블의 크기가 0보다 크다면
+            {
+                datas = new string[dt_rows_count][];//행만큼의 2차원 배열 생성
+                for (int i = 0; i < dt_rows_count; i++)
+                {
+                    datas[i] = new string[dt_cols_count];//해당 행만큼 세부 1차원 배열 생성
+                }
+
+                for (int i = 0; i < dt_rows_count; i++)
+                {
+                    for (int j = 0; j < dt_cols_count; j++)
+                    {
+                        datas[i][j] = Convert.ToString(dt.Rows[i][j]);//데이터를Convert.ToString(dt.Rows[i][j]);//데이터를 생성한 배열에 저장
+                    }
                 }
             }
             else
             {
-                throw new Exception("Parameter Is Null");
+                datas = null;//0보다 작다면 null값 설정
             }
         }
-
-        public static void GetInstance()
+        catch (Exception ex)
         {
-            try 
-            { 
-                 lock (typeof(DBService))
-                {
-                    if (_service == null)
-                    {
-                        _service = new DBService();
-                    }
-                }
-            } catch(Exception){
-                throw new Exception("init Plz");
-            }
-               
+            //write yout logs
         }
-
-        /// <summary>
-        /// 조건이 없는 select문
-        /// </summary>
-        /// <param name="sql">SQL</param>
-        /// <returns>검색결과</returns>
-        public DataTable SelectAll(string sql)
+        finally
         {
-            DataTable table = new DataTable();
-
-            switch (connectionType)
-            {
-                case DBService.MySQL:
-                    try
-                    {
-                        using (mysqlConn = new MySqlConnection(this.ConnectionString))
-                        {
-                            mysqlConn.Open();
-                            using (MySqlCommand command = mysqlConn.CreateCommand())
-                            using (MySqlDataReader reader = command.ExecuteReader())
-                            {
-                                command.CommandText = sql;
-                                table.Load(reader);
-                            }
-                        }
-                    }
-                    catch (MySqlException ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                        Console.WriteLine(ex.InnerException);
-                        Console.WriteLine(ex.StackTrace);
-                    }
-                    break;
-                case DBService.SQLServer:
-                    try
-                    {
-                        using (sqlConn = new SqlConnection(this.ConnectionString))
-                        {
-                            sqlConn.Open();
-                            using (SqlCommand command = sqlConn.CreateCommand())
-                            using (SqlDataReader reader = command.ExecuteReader())
-                            {
-                                command.CommandText = sql;
-                                table.Load(reader);
-                            }
-                        }
-                    }
-                    catch (SqlException ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                        Console.WriteLine(ex.InnerException);
-                        Console.WriteLine(ex.StackTrace);
-                    }
-                    break;
-            }
-            return table;
+            //   dt.Dispose();//데이터 테이블 해제
         }
+        return datas;//해당 sql문의 쿼리 결과를 2차원 문자열 배열로 전송 
+    }
 
-        /// <summary>
-        /// 조건이 존재하는 select문
-        /// </summary>
-        /// <param name="sql">SQL</param>
-        /// <param name="parameters">parameter(string array)</param>
-        /// <param name="values">values(string array)</param>
-        /// <returns>검색결과</returns>
-        public DataTable Select(string sql, string[] parameters, object[] values)
+    /// <summary>
+    /// sql에 @파라미터가 있을경우 추출(_허용)
+    /// </summary>
+    private string[] extractParameters(string sql)
+    {
+        Regex reg = new Regex(@"@[a-zA-Z_]+", RegexOptions.IgnoreCase);
+        MatchCollection collection = reg.Matches(sql);
+        string[] ParamArray = new string[collection.Count];
+        int i = 0;
+        foreach (Match m in collection)
         {
-            DataTable table = new DataTable();
-            switch (connectionType)
-            {
-                case DBService.MySQL:
-                    try
-                    {
-                        using (mysqlConn = new MySqlConnection(this.ConnectionString))
-                        {
-                            mysqlConn.Open();
-                            using (MySqlCommand command = mysqlConn.CreateCommand())
-                            {
-                                command.CommandText = sql;
-                                for (int i = 0; i < parameters.Length; i++)
-                                {
-                                    if (string.IsNullOrEmpty(parameters[i]) == false)
-                                    {
-                                        command.Parameters.AddWithValue("@" + parameters[i], values[i]);
-                                    }
-                                }
-                                using (MySqlDataReader reader = command.ExecuteReader())
-                                {
-                                    table.Load(reader);
-                                }
-                            }
-                        }
-                    }
-                    catch (MySqlException ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                        Console.WriteLine(ex.InnerException);
-                        Console.WriteLine(ex.StackTrace);
-                    }
-                    break;
-                case DBService.SQLServer:
-                    try
-                    {
-                        using (sqlConn = new SqlConnection(this.ConnectionString))
-                        {
-                            sqlConn.Open();
-                            using (SqlCommand command = sqlConn.CreateCommand())
-                            {
-                                command.CommandText = sql;
-                                for (int i = 0; i < parameters.Length; i++)
-                                {
-                                    if (string.IsNullOrEmpty(parameters[i]) == false)
-                                    {
-                                        command.Parameters.AddWithValue("@" + parameters[i], values[i]);
-                                    }
-                                }
-                                using (SqlDataReader reader = command.ExecuteReader())
-                                {
-                                    table.Load(reader);
-                                }
-                            }
-                        }
-                    }
-                    catch (SqlException ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                        Console.WriteLine(ex.InnerException);
-                        Console.WriteLine(ex.StackTrace);
-                    }
-                    break;
-            }
-            return table;
+            ParamArray.SetValue(m.Value, i);
+            i++;
         }
-
-        /// <summary>
-        /// 출력행이 하나일때 배열로 받음
-        /// </summary>
-        /// <param name="sql">SQL</param>
-        /// <param name="parameters">parameter(string array)</param>
-        /// <param name="values">values(string array)</param>
-        /// <returns>검색결과(string array)</returns>
-        public string[] SelectOne(string sql, string[] parameters, object[] values)
+        return ParamArray;
+    }
+    /// <summary>
+    /// 배열에서 빈값이 아닌 개수 리턴
+    /// </summary>
+    private int arraylength(object[] values)
+    {
+        int cnt = 0;
+        for (int i = 0; i < values.Length; i++)
         {
-            DataTable table = new DataTable();
-            string[] resArray;
-            switch (connectionType)
-            {
-                case DBService.MySQL:
-                    try
-                    {
-                        using (mysqlConn = new MySqlConnection(this.ConnectionString))
-                        {
-                            mysqlConn.Open();
-                            using (MySqlCommand command = mysqlConn.CreateCommand())
-                            {
-
-                                for (int i = 0; i < parameters.Length; i++)
-                                {
-                                    if (string.IsNullOrEmpty(parameters[i]) == false)
-                                    {
-                                        command.Parameters.AddWithValue("@" + parameters[i], values[i]);
-                                    }
-                                }
-                                using (MySqlDataReader reader = command.ExecuteReader())
-                                {
-                                    table.Load(reader);
-                                }
-                            }
-                        }
-                    }
-                    catch (MySqlException ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                        Console.WriteLine(ex.InnerException);
-                        Console.WriteLine(ex.StackTrace);
-                    }
-                    break;
-                case DBService.SQLServer:
-                    try
-                    {
-                        using (sqlConn = new SqlConnection(this.ConnectionString))
-                        {
-                            sqlConn.Open();
-                            using (SqlCommand command = new SqlCommand(sql, sqlConn))
-                            {
-                                for (int i = 0; i < parameters.Length; i++)
-                                {
-                                    if (string.IsNullOrEmpty(parameters[i]) == false)
-                                    {
-                                        command.Parameters.AddWithValue("@" + parameters[i], values[i]);
-                                    }
-                                }
-                                using (SqlDataReader reader = command.ExecuteReader())
-                                {
-                                    table.Load(reader);
-                                }
-                            }
-                        }
-                    }
-                    catch (SqlException ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                        Console.WriteLine(ex.InnerException);
-                        Console.WriteLine(ex.StackTrace);
-                    }
-                    break;
-            }
-            resArray = new string[table.Rows.Count - 1];
-
-            for (int i = 0; i < table.Rows.Count; i++)
-            {
-                resArray[i] = table.Rows[i][0].ToString();
-            }
-
-            return resArray;
+            if (values[i] != null)
+                cnt++;
         }
+        return cnt;
+    }
 
-        /// <summary>
-        /// Insert
-        /// </summary>
-        /// <param name="sql">SQL</param>
-        /// <param name="parameters">parameter(string array)</param>
-        /// <param name="values">values(string array)</param>
-        /// <returns>검색결과(string array)</returns>
-        public int Insert(string sql, string[] parameters, object[] values)
+    /// <summary>
+    /// 배열 빈칸제거
+    /// </summary>
+    private void resizeArray(ref object[] values)
+    {
+        int index = 0;
+        object[] backupArray = values;
+        Array.Resize<object>(ref values, arraylength(values));
+        for(int i=0; i < backupArray.Length; i++)
         {
-            return IUD(sql, parameters, values);
+           if(backupArray[i] != null){ values[index] = backupArray[i]; index++; }
         }
-
-        /// <summary>
-        /// Update
-        /// </summary>
-        /// <param name="sql">SQL</param>
-        /// <param name="parameters">parameter(string array)</param>
-        /// <param name="values">values(string array)</param>
-        /// <returns>검색결과(string array)</returns>
-        public int Update(string sql, string[] parameters, object[] values)
-        {
-            return IUD(sql, parameters, values);
-        }
-
-        /// <summary>
-        /// Delete
-        /// </summary>
-        /// <param name="sql">SQL</param>
-        /// <param name="parameters">parameter(string array)</param>
-        /// <param name="values">values(string array)</param>
-        /// <returns>검색결과(string array)</returns>
-        public int Delete(string sql, string[] parameters, object[] values)
-        {
-            return IUD(sql, parameters, values);
-        }
-
-        /// <summary>
-        /// Insert, Update, Delete (Inner Method)
-        /// </summary>
-        /// <param name="sql">SQL</param>
-        /// <param name="parameters">parameter(string array)</param>
-        /// <param name="values">values(string array)</param>
-        /// <returns>검색결과(string array)</returns>
-        private int IUD(string sql, string[] parameters, object[] values)
-        {
-            int msg = 0;
-            switch (connectionType)
-            {
-                case DBService.MySQL:
-                    try
-                    {
-                        using (mysqlConn = new MySqlConnection(this.ConnectionString))
-                        {
-                            mysqlConn.Open();
-                            using (MySqlCommand command = new MySqlCommand(sql, mysqlConn))
-                            {
-                                if (parameters != null && values != null)
-                                {
-                                    for (int i = 0; i < parameters.Length; i++)
-                                    {
-                                        if (string.IsNullOrEmpty(parameters[i]) == false)
-                                        {
-                                            command.Parameters.AddWithValue("@" + parameters[i], values[i]);
-                                        }
-                                    }
-                                }
-                                msg = command.ExecuteNonQuery();
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                        Console.WriteLine(ex.StackTrace);
-                    }
-                    break;
-                case DBService.SQLServer:
-                    try
-                    {
-                        using (sqlConn = new SqlConnection(this.ConnectionString))
-                        {
-                            sqlConn.Open();
-                            using (SqlCommand command = new SqlCommand(sql, sqlConn))
-                            {
-                                if (parameters != null && values != null)
-                                {
-                                    for (int i = 0; i < parameters.Length; i++)
-                                    {
-                                        if (string.IsNullOrEmpty(parameters[i]) == false)
-                                        {
-                                            command.Parameters.AddWithValue("@" + parameters[i], values[i]);
-                                        }
-                                    }
-                                }
-                                msg = command.ExecuteNonQuery();
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex.Message);
-                        Console.WriteLine(ex.StackTrace);
-                    }
-                    break;
-            }
-            return msg;
-        }
+        //return void;
     }
 }
